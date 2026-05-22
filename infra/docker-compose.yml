@@ -1,0 +1,223 @@
+# MS-00 — Airflow local (LocalExecutor, sans Celery)
+# Usage : voir README_DEV.md
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:3.2.1-python3.11
+  env_file:
+    - .env
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: "46BKJoQYlPPOexq0OhDZnIlEpSRfiYUc461l1tZTYAk="
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: airflow_jwt_secret
+    AIRFLOW__API_AUTH__JWT_ISSUER: airflow
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    PYTHONPATH: /opt/airflow
+    _PIP_ADDITIONAL_REQUIREMENTS: ${AIRFLOW_PIP_ADDITIONAL_REQUIREMENTS:-sqlalchemy==2.0.36 psycopg2-binary==2.9.10 requests PySocks}
+    # MS-10 — variables métier (surcharge via infra/.env)
+    DATABASE_URL: ${DATABASE_URL:-postgresql://app:app@postgres:5432/belgian_companies}
+    HDFS_LOCAL_ROOT: ${HDFS_LOCAL_ROOT:-/opt/airflow/data/hdfs-stub}
+    HDFS_RAW_ROOT: ${HDFS_RAW_ROOT:-hdfs://localhost:9000/raw/v1}
+    KBO_PUBLIC_BASE_URL: ${KBO_PUBLIC_BASE_URL:-https://kbopub.economie.fgov.be/kbopub/}
+    BNB_CONSULT_BASE_URL: ${BNB_CONSULT_BASE_URL:-https://consult.cbso.nbb.be/}
+    MONITEUR_EJUSTICE_BASE_URL: ${MONITEUR_EJUSTICE_BASE_URL:-https://www.ejustice.just.fgov.be/cgi_tsv/}
+    # Optionnel : page notaire.be ; vide = Moniteur list.pl (défaut sujet PDF)
+    NOTAIRE_STATUTES_URL: ${NOTAIRE_STATUTES_URL:-}
+    ACQUISITION_MIN_DELAY_S: ${ACQUISITION_MIN_DELAY_S:-0.5}
+    ACQUISITION_MAX_DELAY_S: ${ACQUISITION_MAX_DELAY_S:-2.0}
+    ACQUISITION_MAX_RETRIES: ${ACQUISITION_MAX_RETRIES:-3}
+    ACQUISITION_USE_PROXIES: ${ACQUISITION_USE_PROXIES:-0}
+    ACQUISITION_ALLOW_DIRECT: ${ACQUISITION_ALLOW_DIRECT:-1}
+    ACQUISITION_USE_TOR: ${ACQUISITION_USE_TOR:-1}
+    ACQUISITION_TOR_PROXIES: ${ACQUISITION_TOR_PROXIES:-socks5h://tor1:9050,socks5h://tor2:9050,socks5h://tor3:9050}
+    ACQUISITION_KBO_DIRECT_FIRST: ${ACQUISITION_KBO_DIRECT_FIRST:-1}
+    ACQUISITION_TOR_LOOP_MIN_INTERVAL_S: ${ACQUISITION_TOR_LOOP_MIN_INTERVAL_S:-600}
+    ACQUISITION_TOR_LOG_EXIT_IP: ${ACQUISITION_TOR_LOG_EXIT_IP:-0}
+    ACQUISITION_WORKER_ID: ${ACQUISITION_WORKER_ID:-acquisition-worker-1}
+    ACQUISITION_HTTP_TIMEOUT_S: ${ACQUISITION_HTTP_TIMEOUT_S:-60.0}
+    ACQUISITION_USER_AGENT: ${ACQUISITION_USER_AGENT:-belgian-companies-platform/0.1 (+acquisition; MS-02)}
+    ACQUISITION_ENABLED_SOURCES: ${ACQUISITION_ENABLED_SOURCES:-}
+  volumes:
+    - ${AIRFLOW_DAGS_DIR:-../airflow/dags}:/opt/airflow/dags
+    - ${AIRFLOW_PROJ_DIR:-..}/airflow/scripts:/opt/airflow/scripts:ro
+    - ${AIRFLOW_PACKAGES_DIR:-../packages}:/opt/airflow/packages
+    - ${AIRFLOW_PROJ_DIR:-..}/data/hdfs-stub:/opt/airflow/data/hdfs-stub
+    - ${AIRFLOW_PROJ_DIR:-..}/data/seed:/opt/airflow/data/seed
+    - ${AIRFLOW_PROJ_DIR:-..}/data/input:/opt/airflow/data/input
+    - ${AIRFLOW_PROJ_DIR:-..}/data/proxies:/opt/airflow/data/proxies
+    - airflow-logs:/opt/airflow/logs
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    tor1:
+      condition: service_started
+    tor2:
+      condition: service_started
+    tor3:
+      condition: service_started
+
+services:
+  tor1:
+    image: dperson/torproxy
+    container_name: tor1
+    restart: unless-stopped
+    environment:
+      - CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:-mypass}
+
+  tor2:
+    image: dperson/torproxy
+    container_name: tor2
+    restart: unless-stopped
+    environment:
+      - CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:-mypass}
+
+  tor3:
+    image: dperson/torproxy
+    container_name: tor3
+    restart: unless-stopped
+    environment:
+      - CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:-mypass}
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-db:/var/lib/postgresql/data
+      - ./postgres/init-app-db.sql:/docker-entrypoint-initdb.d/02-app-db.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "$${_AIRFLOW_WWW_USER_USERNAME}" \
+          --password "$${_AIRFLOW_WWW_USER_PASSWORD}" \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com || true
+        bash /opt/airflow/scripts/init_pools.sh
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+    restart: "no"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-apiserver:
+        condition: service_healthy
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  # MS-09 — frontend supervision (FastAPI + static)
+  dashboard:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.dashboard
+    image: belgian-companies-dashboard:local
+    environment:
+      DATABASE_URL: postgresql://app:app@postgres:5432/belgian_companies
+      AIRFLOW_UI_URL: ${AIRFLOW_UI_URL:-http://localhost:8080}
+      AIRFLOW_API_URL: http://airflow-apiserver:8080
+      AIRFLOW_API_USER: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      AIRFLOW_API_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:-}
+      HDFS_LOCAL_ROOT: /app/data/hdfs-stub
+      PYTHONPATH: /app
+    volumes:
+      - ${AIRFLOW_PACKAGES_DIR:-../packages}:/app/packages:ro
+      - ${AIRFLOW_PROJ_DIR:-..}/data/hdfs-stub:/app/data/hdfs-stub
+      - ${AIRFLOW_PROJ_DIR:-..}/data/proxies:/app/data/proxies:ro
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/api/health', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-apiserver:
+        condition: service_healthy
+
+volumes:
+  postgres-db:
+  airflow-logs:

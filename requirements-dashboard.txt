@@ -1,0 +1,3 @@
+# MS-09 — dashboard supervision (hors image Airflow)
+fastapi==0.115.6
+uvicorn[standard]==0.34.0

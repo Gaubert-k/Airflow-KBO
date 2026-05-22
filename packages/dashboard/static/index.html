@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Supervision — Entreprises belges</title>
+  <link rel="stylesheet" href="/static/style.css?v=12"/>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Plateforme entreprises belges</h1>
+      <p class="subtitle">Supervision pipeline · MS-09</p>
+    </div>
+    <nav class="topnav">
+      <a id="airflow-link" href="http://localhost:8080" target="_blank" rel="noopener">Airflow ↗</a>
+      <span id="refresh-badge" class="badge">Initialisation…</span>
+    </nav>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Sections dashboard">
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="guide" id="tab-btn-guide">
+      Guide
+    </button>
+    <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="enterprises" id="tab-btn-enterprises">
+      Entreprises
+    </button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="overview" id="tab-btn-overview">
+      Vue globale
+    </button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="analytics" id="tab-btn-analytics">
+      Analytics
+    </button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="dags" id="tab-btn-dags">
+      DAGs Airflow
+    </button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="journal" id="tab-btn-journal">
+      Journal
+    </button>
+  </nav>
+
+  <main class="layout">
+    <!-- Onglet Guide -->
+    <div class="tab-panel" id="panel-guide" role="tabpanel" aria-labelledby="tab-btn-guide" hidden>
+      <section class="panel guide-panel">
+        <h2>Comment utiliser la plateforme</h2>
+        <p class="hint">Documentation complète : <code>GUIDE.md</code> à la racine du projet.</p>
+        <ol class="guide-steps">
+          <li><strong>Ingestion</strong> (une fois) — DAG <code>01_ingest_csv</code> → file « File scrape ».</li>
+          <li><strong>Scrape</strong> — DAG <code>02_scrape_by_source</code> : KBO d’abord (passes Tor), puis Moniteur / statuts / BNB sur les BCE où le KBO a réussi. Cochez des BCE dans Entreprises.</li>
+          <li><strong>Structuration</strong> — bouton <em>Parser</em> ou DAG <code>04_extract_batch</code> → registre en français.</li>
+          <li><strong>Analytics</strong> — DAG <code>07_analytics_refresh</code> → onglet Analytics.</li>
+        </ol>
+        <pre class="pipeline-flow" aria-label="Flux pipeline">01 ingest → 02 scrape (KBO Tor → 3 sites) → 04 extract → 07 analytics
+Démo rapide : 08_full_pipeline (limit 5–10)</pre>
+        <table class="data-table compact">
+          <thead><tr><th>État</th><th>Signification</th><th>Action</th></tr></thead>
+          <tbody>
+            <tr><td>File scrape</td><td>En attente</td><td>DAG 02</td></tr>
+            <tr><td>File parse</td><td>Bruts OK</td><td>Parser / DAG 04</td></tr>
+            <tr><td>Structuré</td><td>Registre prêt</td><td>Détail entreprise</td></tr>
+          </tbody>
+        </table>
+        <p class="hint">
+          <a href="http://localhost:8080" target="_blank" rel="noopener">Airflow ↗</a>
+          · Dashboard : vous êtes ici · Langue fiche : français (re-scrape pour contenu FR natif)
+        </p>
+      </section>
+    </div>
+
+    <!-- Onglet Entreprises -->
+    <div class="tab-panel active" id="panel-enterprises" role="tabpanel" aria-labelledby="tab-btn-enterprises">
+      <section class="panel">
+        <p class="hint" id="ent-filter-hint">
+          <strong>En attente (~3,6 M)</strong> : filtre « File scrape » (liste rapide) puis lancez
+          <strong>02_scrape_by_source</strong> (KBO Tor puis 3 sites) : cochez des n° BCE puis
+          <strong>DAG scrape</strong> ou l’onglet DAGs.
+        </p>
+        <p id="ent-selection-bar" class="selection-bar" hidden>
+          <span><strong id="ent-selection-count">0</strong> entreprise(s) sélectionnée(s)</span>
+          <button type="button" class="btn btn-sm" id="ent-dag-scrape-selection">DAG scrape sélection</button>
+          <button type="button" class="btn btn-sm btn-secondary" id="ent-clear-selection">Tout décocher</button>
+        </p>
+        <div class="toolbar">
+          <input type="search" id="ent-search" placeholder="N° BCE (min. 4 chiffres)" aria-label="Rechercher"/>
+          <select id="ent-state-filter" aria-label="Filtrer par état">
+            <option value="QUEUED_SCRAPE">File scrape (en attente)</option>
+            <option value="STRUCTURED" selected>Structuré</option>
+            <option value="QUEUED_PARSE">File parse</option>
+            <option value="FAILED_SCRAPE">Échec scrape</option>
+            <option value="FAILED_PARSE">Échec parse</option>
+            <option value="SCRAPING">Scrape en cours</option>
+            <option value="PARSING">Parse en cours</option>
+          </select>
+          <select id="ent-sort" aria-label="Tri">
+            <option value="recent_scrape">Dernier scrape</option>
+            <option value="state_since">Changement d'état</option>
+            <option value="number">Numéro</option>
+          </select>
+          <button type="button" class="btn" id="ent-refresh">Rafraîchir</button>
+          <button type="button" class="btn btn-secondary" id="ent-dag-scrape" title="02_scrape_by_source — KBO Tor puis 3 sites">
+            DAG scrape (Airflow)
+          </button>
+        </div>
+        <p id="ent-status" class="status-line"></p>
+        <div class="table-wrap">
+          <table class="data-table enterprises-table">
+            <thead>
+              <tr>
+                <th class="col-check"><input type="checkbox" id="ent-select-all" title="Page courante"/></th>
+                <th>N° BCE</th>
+                <th>État</th>
+                <th>Dernier scrape</th>
+                <th>Brut</th>
+                <th>Registre</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="enterprises-tbody">
+              <tr><td colspan="6" class="empty-msg">Chargement…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <nav class="pagination" id="ent-pagination" aria-label="Pagination"></nav>
+      </section>
+    </div>
+
+    <!-- Onglet Vue globale -->
+    <div class="tab-panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-btn-overview" hidden>
+      <section class="kpi-grid" id="kpi-grid" aria-label="Indicateurs clés"></section>
+      <div class="two-col">
+        <section class="panel">
+          <h2>File par état</h2>
+          <div id="queue-chart" class="bar-chart"></div>
+          <table class="data-table compact" id="queue-table">
+            <thead><tr><th>État</th><th>Nombre</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+        <section class="panel">
+          <h2>Performance</h2>
+          <ul class="perf-list" id="perf-list"></ul>
+          <h3 class="subhead">Métriques process</h3>
+          <pre class="metrics-pre" id="acq-metrics">—</pre>
+        </section>
+      </div>
+    </div>
+
+    <!-- Onglet Analytics -->
+    <div class="tab-panel" id="panel-analytics" role="tabpanel" aria-labelledby="tab-btn-analytics" hidden>
+      <section class="panel">
+        <h2>Exploitation des données (MS-08)</h2>
+        <p class="hint" id="analytics-hint"></p>
+        <p class="hint" id="analytics-help"></p>
+        <div id="analytics-kpis" class="analytics-kpis" aria-label="Synthèse"></div>
+        <div class="three-col analytics-grid">
+          <div class="analytics-block">
+            <h3>Répartition par code postal</h3>
+            <p class="hint block-hint">Siège social (KBO) — top 15</p>
+            <table class="data-table" id="postal-table">
+              <thead><tr><th>Code postal</th><th>Entreprises</th><th>%</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="analytics-block">
+            <h3>Statut juridique (KBO)</h3>
+            <p class="hint block-hint">Actif, inactif, radié… depuis le snapshot</p>
+            <table class="data-table" id="state-table">
+              <thead><tr><th>Statut</th><th>Entreprises</th><th>%</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="analytics-block">
+            <h3>Activités (NACE-BEL)</h3>
+            <p class="hint block-hint">Codes d’activité TVA — top 12</p>
+            <table class="data-table" id="activity-table">
+              <thead><tr><th>Code</th><th>Activité</th><th>Entr.</th><th>%</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Onglet DAGs -->
+    <div class="tab-panel" id="panel-dags" role="tabpanel" aria-labelledby="tab-btn-dags" hidden>
+      <section class="panel">
+        <h2>Lancer un DAG Airflow</h2>
+        <p class="hint">Déclenchement via l’API (même effet que l’UI Airflow). Scrape : <code>02_scrape_by_source</code> (KBO Tor) puis <code>04_extract_batch</code>.</p>
+        <div class="callout callout-warn">
+          <strong>Scrape :</strong> <code>02_scrape_by_source</code> — KBO via Tor (direct → tor1→2→3), puis Moniteur/statuts/BNB si KBO OK ;
+          <code>parallel_requests_per_site</code> = requêtes simultanées <em>par site</em> (ex. 5).
+          Options : Tor KBO, pass direct d’abord, boucle Tor (≥10 min entre cycles). Cochez des BCE dans Entreprises avant de lancer.
+        </div>
+        <div id="dags-catalog" class="dags-grid"></div>
+        <p id="dag-trigger-status" class="status-line"></p>
+        <section class="detail-section">
+          <h3>Dernières exécutions Airflow</h3>
+          <p class="hint">Rafraîchies à l’ouverture de l’onglet et après chaque lancement.</p>
+          <div class="table-wrap">
+            <table class="data-table" id="dag-runs-table">
+              <thead>
+                <tr><th>DAG</th><th>Run ID</th><th>État</th><th>Début</th><th>Conf</th><th></th></tr>
+              </thead>
+              <tbody id="dag-runs-tbody">
+                <tr><td colspan="6" class="empty-msg">Chargement…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <!-- Onglet Journal -->
+    <div class="tab-panel" id="panel-journal" role="tabpanel" aria-labelledby="tab-btn-journal" hidden>
+      <div class="two-col">
+        <section class="panel">
+          <h2>Découvertes</h2>
+          <table class="data-table" id="discoveries-table">
+            <thead>
+              <tr><th>Source</th><th>Découverte</th><th>Raison</th><th>Date</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </section>
+        <section class="panel">
+          <h2>Événements</h2>
+          <table class="data-table" id="events-table">
+            <thead><tr><th>Type</th><th>Détail</th><th>Date</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <span>Rafraîchissement auto 15 s · onglet actif uniquement</span>
+    <span id="generated-at"></span>
+  </footer>
+  <div id="toast" class="toast" hidden role="status"></div>
+
+  <div id="detail-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="detail-title">
+    <div class="modal-backdrop" data-close="1"></div>
+    <div class="modal-card">
+      <header class="modal-header">
+        <h2 id="detail-title">Détail entreprise</h2>
+        <button type="button" class="modal-close" data-close="1" aria-label="Fermer">×</button>
+      </header>
+      <div class="modal-body" id="detail-body">Chargement…</div>
+      <footer class="modal-footer" id="detail-footer"></footer>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=14"></script>
+</body>
+</html>

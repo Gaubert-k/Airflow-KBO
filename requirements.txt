@@ -1,0 +1,11 @@
+# Runtime Airflow (aligné sur l'image Docker infra/docker-compose.yml)
+apache-airflow==3.2.1
+# MS-05 (tasks ingest/scrape) — pin exact 2.0.36 dans l'image Docker :
+#   infra/docker-compose.yml → _PIP_ADDITIONAL_REQUIREMENTS
+# Pour pip local avec apache-airflow 3.2, plage compatible :
+sqlalchemy>=2.0.36,<2.1
+psycopg2-binary==2.9.10
+# Provider postgres pour la métadonnée Airflow en Docker
+apache-airflow-providers-postgres==6.6.3
+# Operators/sensors déplacés hors core en Airflow 3
+apache-airflow-providers-standard==1.12.3

@@ -1,0 +1,7 @@
+# Outils CI locale (sans Airflow — exécution orchestrateur via Docker)
+ruff==0.8.6
+pytest==8.3.4
+# MS-05 — ORM + migrations (tests SQLite ; prod PostgreSQL)
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg2-binary==2.9.10
